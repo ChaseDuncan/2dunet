@@ -21,7 +21,7 @@ class UNet(nn.Module):
 class UNetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None,
             submodule=None, outermost=False, innermost=False,
-            norm_layer=nn.BatchNorm2d, use_dropout=False):
+            norm_layer=nn.BatchNorm2d, use_dropout=False, freeze_encoder=False):
         super(UNetSkipConnectionBlock, self).__init__()
 
         if input_nc is None:
@@ -30,10 +30,18 @@ class UNetSkipConnectionBlock(nn.Module):
         self.outermost  = outermost
         downconv        = nn.Conv2d(input_nc, inner_nc, kernel_size=4,
                                         stride=2, padding=1)
+        
+
         downrelu        = nn.LeakyReLU(0.2, True)
         downnorm        = norm_layer(inner_nc)
         uprelu          = nn.ReLU(True)
         upnorm          = norm_layer(outer_nc)
+
+        if freeze_encoder:
+            for param in downconv.parameters():
+                param.requires_grad = False
+            for param in downnorm.parameters():
+                param.requires_grad = False
 
         if outermost:
             upconv      = nn.ConvTranspose2d(inner_nc*2, outer_nc,
@@ -76,25 +84,31 @@ class UNetSkipConnectionBlock(nn.Module):
 # at the bottleneck
 class UNetGenerator(nn.Module):
     def __init__(self, input_nc, output_nc, num_downs, ngf=64,
-                 norm_layer=nn.BatchNorm2d, use_dropout=False):
+                 norm_layer=nn.BatchNorm2d, use_dropout=False, freeze_encoder=False):
         super(UNetGenerator, self).__init__()
 
         # construct unet structure
         unet_block = UNetSkipConnectionBlock(ngf * 8, ngf * 8, 
                                             input_nc=None, submodule=None, 
-                                            norm_layer=norm_layer, innermost=True)
+                                            norm_layer=norm_layer, innermost=True, 
+                                            freeze_encoder=freeze_encoder)
         for i in range(num_downs - 5):
             unet_block = UNetSkipConnectionBlock(ngf * 8, ngf * 8, 
                                                 input_nc=None, submodule=unet_block, 
-                                                norm_layer=norm_layer, use_dropout=use_dropout)
+                                                norm_layer=norm_layer, use_dropout=use_dropout,
+                                                freeze_encoder=freeze_encoder)
         unet_block = UNetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, 
-                                            submodule=unet_block, norm_layer=norm_layer)
+                                            submodule=unet_block, norm_layer=norm_layer, 
+                                            freeze_encoder=freeze_encoder)
         unet_block = UNetSkipConnectionBlock(ngf * 2, ngf * 4, 
-                                            input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+                                            input_nc=None, submodule=unet_block, norm_layer=norm_layer, 
+                                            freeze_encoder=freeze_encoder)
         unet_block = UNetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, 
-                                            submodule=unet_block, norm_layer=norm_layer)
+                                            submodule=unet_block, norm_layer=norm_layer, 
+                                            freeze_encoder=freeze_encoder)
         unet_block = UNetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, 
-                                            submodule=unet_block, outermost=True, norm_layer=norm_layer)
+                                            submodule=unet_block, outermost=True, norm_layer=norm_layer, 
+                                            freeze_encoder=freeze_encoder)
 
         self.model = unet_block
 
