@@ -85,7 +85,6 @@ def preprocess(input_dir, output_dir):
                     [f for f in filenames if 'flair.' in f],
                     [f for f in filenames if 'seg.' in f]
                     ]
-
     meta_storage    = []
     data_dir = os.path.join(output_dir, 'data/')
     os.makedirs(data_dir, exist_ok=True)
@@ -98,16 +97,11 @@ def preprocess(input_dir, output_dir):
             for i, e in enumerate(examples_p):
                 # save example
                 np.save(os.path.join(data_dir, f'{pid}.{i:03}.npy'), e)
-
-            # TODO: metadata
-            #for s in shapes_p:
-            #    meta_storage.append(s[np.newaxis, ...])
-
             pbar.update(1)
 
 if __name__=='__main__':
-    input_dir = 'brats2020/MICCAI_BraTS2020_TrainingData/*/*.nii.gz'
-    output_dir = 'brats2020/2d-preprocessed/'
+    input_dir = 'brats2020/2dunet/test/*.nii.gz'
+    output_dir = 'brats2020/2dunet/test-preprocessed/'
     os.makedirs(output_dir, exist_ok=True)
     preprocess(input_dir, output_dir)
 

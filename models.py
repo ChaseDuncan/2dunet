@@ -75,7 +75,9 @@ class UNetSkipConnectionBlock(nn.Module):
         if self.outermost:
             return self.model(x)
         else:
-            return torch.cat([x, self.model(x)], 1)
+            y = self.model(x)  
+            y = nn.functional.pad(y, (0,x.size()[-2]-y.size()[-2],0,x.size()[-1]-y.size()[-1]))
+            return torch.cat([x, y], 1)
 
 
 # much of thi the Unet generator.
@@ -92,11 +94,12 @@ class UNetGenerator(nn.Module):
                                             input_nc=None, submodule=None, 
                                             norm_layer=norm_layer, innermost=True, 
                                             freeze_encoder=freeze_encoder)
-        for i in range(num_downs - 5):
-            unet_block = UNetSkipConnectionBlock(ngf * 8, ngf * 8, 
-                                                input_nc=None, submodule=unet_block, 
-                                                norm_layer=norm_layer, use_dropout=use_dropout,
-                                                freeze_encoder=freeze_encoder)
+
+        #for i in range(num_downs - 5):
+        #    unet_block = UNetSkipConnectionBlock(ngf * 8, ngf * 8, 
+        #                                        input_nc=None, submodule=unet_block, 
+        #                                        norm_layer=norm_layer, use_dropout=use_dropout,
+        #                                        freeze_encoder=freeze_encoder)
         unet_block = UNetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, 
                                             submodule=unet_block, norm_layer=norm_layer, 
                                             freeze_encoder=freeze_encoder)
@@ -114,6 +117,7 @@ class UNetGenerator(nn.Module):
 
     def forward(self, x):
         return self.model(x) 
+
 
 # code was stolen from/inspired by:
 # https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/2ecf15f8a7f87fa56e784e0504136e9daf6b93d6/models/networks.py#L259 

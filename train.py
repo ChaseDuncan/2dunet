@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from tqdm import tqdm
 
-from dataloader import BraTS20202d
+from dataloader import BraTS2020Training2d
 from models import UNetGenerator
 from losses import BraTSBCEWithLogitsLoss
 from sklearn.model_selection import train_test_split 
@@ -21,6 +21,7 @@ from argparse import ArgumentParser
 
 argparser = ArgumentParser()
 argparser.add_argument('--device', type=int, required=True, help='id of device to run training on.')
+argparser.add_argument('--seed', type=int, required=True, help='random seed to use for training.')
 argparser.add_argument('--dir', type=str, help='directory for all model output, logs, checkpoints, etc.')
 argparser.add_argument('--debug', action='store_true', 
         help='use debug mode which only uses one example to train and eval.')
@@ -36,13 +37,13 @@ os.makedirs(args.dir + '/logs/', exist_ok=True)
 os.makedirs(args.dir + '/checkpoints/', exist_ok=True)
 
 #   sundry
-seed        = 1234
+seed        = args.seed
 device      = torch.device(f'cuda:{args.device}')
 
 #   model params
 input_nc    = 4
 output_nc   = 3
-num_downs   = 4
+num_downs   = 3
 ngf         = 64
 #   optim params
 lr          = 8e-3
@@ -60,21 +61,24 @@ torch.set_deterministic(True)
 if args.debug:
     data_dir    = 'brats2020/2d-preprocessed-debug/data'
 else:
-    data_dir    = 'brats2020/2d-preprocessed/data'
+    #data_dir    = 'brats2020/2d-preprocessed/data'
+    tr_data_dir    = 'brats2020/2dunet/train-preprocessed/data/'
+    te_data_dir    = 'brats2020/2dunet/test-preprocessed/data/'
 
 #   data setup
 
-print(f'loading data from: {data_dir}')
-dataset                     = BraTS20202d(data_dir)
-indices                     = np.arange(len(dataset))
-train_indices, test_indices = train_test_split(indices, train_size=0.8)
-with open(args.dir + '/crossval_idxs.txt', "w") as f:
-    f.write(f'train_indices\t{train_indices}\ntest_indices\t{test_indices}')
-
-# Warp into Subsets and DataLoaders
-train_dataset               = Subset(dataset, train_indices)
-test_dataset                = Subset(dataset, test_indices)
-
+#print(f'loading data from: {data_dir}')
+train_dataset                     = BraTS2020Training2d(tr_data_dir)
+test_dataset                     = BraTS2020Training2d(te_data_dir)
+#indices                     = np.arange(len(dataset))
+#train_indices, test_indices = train_test_split(indices, train_size=0.8)
+#
+#with open(args.dir + '/crossval_idxs.txt', "w") as f:
+#    f.write(f'train_indices\t{train_indices}\ntest_indices\t{test_indices}')
+#
+## Warp into Subsets and DataLoaders
+#train_dataset               = Subset(dataset, train_indices)
+#test_dataset                = Subset(dataset, test_indices)
 train_loader                = DataLoader(train_dataset, shuffle=True, num_workers=16, batch_size=150)
 # batch_size > 1 required for the image logging to work properly
 test_loader                 = DataLoader(test_dataset, shuffle=False, num_workers=16, batch_size=1)
@@ -128,7 +132,6 @@ def compute_dice(output, target):
     return dice
 
 examples_to_track   = [random.randint(0, len(test_dataset)) for _ in range(10)]
-print(examples_to_track)
 for epoch in range(epochs):
     model.train()
     stuff   = {'epoch': epoch, 'images': []}
@@ -137,7 +140,7 @@ for epoch in range(epochs):
     avg_train_loss    = 0
     for i, (src, tgt) in enumerate(tqdm(train_loader)):
         optimizer.zero_grad()
-        src, tgt    = src.to(device), tgt.to(device)
+        src, tgt    = src.to(device).float(), tgt.to(device).float()
         output      = model(src) 
         loss_e      = loss(output, tgt)
         
@@ -151,7 +154,7 @@ for epoch in range(epochs):
         avg_eval_loss   = 0
         stuff['avg_dice'] = np.zeros(3)
         for j, (src, tgt) in enumerate(tqdm(test_loader)):
-            src, tgt        = src.to(device), tgt.to(device)
+            src, tgt        = src.to(device).float(), tgt.to(device).float()
             output          = model(src) 
             loss_e          = loss(output, tgt)
             # updata average loss
@@ -163,7 +166,6 @@ for epoch in range(epochs):
                 preds[torch.where(sigs > 0.5)] = 255
                 tgt_scaled                  = tgt*255
                 img                         = torch.cat([preds, tgt_scaled.cpu()], dim=1).to(torch.uint8)
-                np.save(f'deleteme{j+1}', img.cpu().numpy())
                 stuff['images'].append((j+1, img))
 
     # breaks if batch_size > 1
