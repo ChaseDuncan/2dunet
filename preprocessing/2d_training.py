@@ -6,78 +6,68 @@ import nibabel as nib
 from tqdm import tqdm
 from glob import glob
 from argparse import ArgumentParser
+import pickle
 
-from utils import *
+
+def binarize_problem(multilabel_problem):
+    et = np.zeros(multilabel_problem.shape)
+    wt = np.zeros(multilabel_problem.shape)
+    tc = np.zeros(multilabel_problem.shape)
+    et[np.where(multilabel_problem == 4)] = 1
+    wt[np.where(multilabel_problem > 0)] = 1
+    tc[np.where((multilabel_problem == 4) | (multilabel_problem == 1))] = 1
+    return np.stack([et, wt, tc])
+
+def patient_id(img_file):
+    ''' gets the patient id from a brats2020 file. here because it's ugly. '''
+    return "_".join(img_file.split("/")[-1].split("_")[:-1])
+
+def normalize(case):
+    ''' important: assumes ground truth is -1th volume '''
+    norm_case = np.zeros(case.shape)
+    norm_case[-1] = case[-1]
+    for i, mode in enumerate(case[:-1]):
+        norm_case[i] = ( mode - np.min(mode) ) / ( np.max(mode) - np.min(mode) )
+    return norm_case
+
+def nonzero_coords(imgs_npy): 
+    ''' gives the nonzero coordinates of a particular mode'''
+    nonzero = [np.array(np.where(i != 0)) for i in imgs_npy]
+    nonzero = [[np.min(i, 1), np.max(i, 1)] for i in nonzero]
+    nonzero = np.array([np.min([i[0] for i in nonzero], 0), np.max([i[1] for i in nonzero], 0)]).T
+    return nonzero
+
+def crop_to_brain(case):
+    orig_shape  = case.shape
+    nonzero     = nonzero_coords(case)
+    return case[:, nonzero[0][0] : nonzero[0][1] + 1,
+                   nonzero[1][0] : nonzero[1][1] + 1,
+                   nonzero[2][0] : nonzero[2][1] + 1], nonzero, orig_shape
+
+def crop_to_brain_and_normalize(case): 
+    brain_crop, nonzero, orig_shape = crop_to_brain(case)
+    return normalize(brain_crop), nonzero, orig_shape
+
 
 def read_brain(case):
-    ''' Expects 5xHxWxD tensor where patient[-1] is the segmentation.'''
-    # since we throw out slices that have no labeled voxels, we cannot
-    # know ahead of time what size the output will be.
-    examples = []
-    shapes = []
+    brain_crop, nonzero, orig_shape = crop_to_brain_and_normalize(case)
+    brain_crop = np.concatenate([brain_crop[:-1], binarize_problem(brain_crop[-1])])
+    return brain_crop, nonzero, orig_shape
 
-    # there's probably a cleaner way to do this... 
-    for i in range(case.shape[1]):
-        # check if slice has no labeled voxels
-        if len(np.where(case[-1, i, :, :] > 0)[0]) == 0:
-            continue
-        else:# slice has labels. preprocess it. add it to the list.
-            # crop to brain
-            nonzero = np.where(case[:-1, i] != 0)
-            x, y = nonzero[1], nonzero[2]
-            # do this at the end?
-            if x.shape[0] == 0: # not all cases have every mode
-                continue
+def has_tumor(seg):
+    if np.sum(seg):
+        return 'tum'
+    else:
+        return 'not'
+    
+def slice_dataset(case):
+    # i don't know if this copy is actually needed here. 
+    slices = [ np.split(case.copy(), case.shape[i+1], axis=i+1) for i in range(len(case.shape)-1) ]
+    return slices
 
-            brain_crop = case[:, i, np.min(x):np.max(x)+1, np.min(y):np.max(y)+1].copy()
-            brain_crop[:-1] = (brain_crop[:-1] - np.min(brain_crop[:-1])) / (np.max(brain_crop[:-1]) - np.min(brain_crop[:-1]))
-            brain_crop = np.concatenate([brain_crop[:-1], binarize_problem(brain_crop[-1])])
-            orig_shape = np.array(brain_crop[0].shape)
-
-            examples.append(brain_crop)
-            shapes.append(orig_shape)
-
-    for i in range(case.shape[2]):
-        # check if slice has no labeled voxels
-        if len(np.where(case[-1, :, i] > 0)[0]) == 0:
-            continue
-        else:# slice has labels. preprocess it. add it to the list.
-            # crop to brain
-            nonzero = np.where(case[:-1, :, i] != 0)
-            x, y = nonzero[1], nonzero[2]
-            if x.shape[0] == 0: # not all cases have every mode
-                continue
-            # do this at the end?
-
-            brain_crop = case[:, np.min(x):np.max(x)+1, i, np.min(y):np.max(y)+1].copy()
-            brain_crop[:-1] = (brain_crop[:-1] - np.min(brain_crop[:-1])) / (np.max(brain_crop[:-1]) - np.min(brain_crop[:-1]))
-            brain_crop = np.concatenate([brain_crop[:-1], binarize_problem(brain_crop[-1])])
-            orig_shape = np.array(brain_crop[0].shape)
-            examples.append(brain_crop)
-            shapes.append(orig_shape)
-
-    for i in range(case.shape[3]):
-        # check if slice has no labeled voxels
-        if len(np.where(case[-1, :, :, i] > 0)[0]) == 0:
-            continue
-        else:# slice has labels. preprocess it. add it to the list.
-            # crop to brain
-            nonzero = np.where(case[:-1, :, :, i] != 0)
-            x, y = nonzero[1], nonzero[2]
-            if x.shape[0] == 0: # not all cases have every mode
-                continue
-
-            # do this at the end?
-            brain_crop = case[:, np.min(x):np.max(x)+1, np.min(y):np.max(y)+1, i].copy()
-            brain_crop[:-1] = (brain_crop[:-1] - np.min(brain_crop[:-1])) / (np.max(brain_crop[:-1]) - np.min(brain_crop[:-1]) + 1e-32)
-            brain_crop = np.concatenate([brain_crop[:-1], binarize_problem(brain_crop[-1])])
-            orig_shape = np.array(brain_crop[0].shape)
-            examples.append(brain_crop)
-            shapes.append(orig_shape)
-
-    return examples, shapes
-
+orientations = ['axial', 'coronal', 'sagittal']
 def preprocess(input_dir, output_dir):
+    ''' creates output_dir if it doesn't exist already '''
     filenames       = glob(input_dir)
     filenames       = [[f for f in filenames if 't1.' in f],
                     [f for f in filenames if 't1ce.' in f],
@@ -85,23 +75,35 @@ def preprocess(input_dir, output_dir):
                     [f for f in filenames if 'flair.' in f],
                     [f for f in filenames if 'seg.' in f]
                     ]
-    meta_storage    = []
-    data_dir = os.path.join(output_dir, 'data/')
-    os.makedirs(data_dir, exist_ok=True)
+
+    os.makedirs(os.path.join(output_dir, 'data'), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, 'meta'), exist_ok=True)
 
     with tqdm(total=len(filenames[0])) as pbar:
         for patient in zip(*filenames):
+            case = [nib.load(img) for img in patient]
+            header = case[0].header
+            case = np.stack([c.get_fdata() for c in case])
+
+            brain_crop, nonzero, orig_shape = read_brain(case)
+            brain_crop_slices = slice_dataset(brain_crop)
+
             pid = patient_id(patient[0])
-            case = np.stack([nib.load(img).get_fdata() for img in patient])
-            examples_p, shapes_p = read_brain(case)
-            for i, e in enumerate(examples_p):
-                # save example
-                np.save(os.path.join(data_dir, f'{pid}.{i:03}.npy'), e)
+            for orientation, slices in zip(orientations, brain_crop_slices):
+                for i, slice in enumerate(slices):
+                    filename = f'{pid}.{orientation}.{i:03}.{has_tumor(slice[-3:])}'
+                    np.save(os.path.join(os.path.join(output_dir, 'data'), filename), slice)
+                    pickle.dump(
+                            { 'header': header, 
+                            'nonzero': nonzero, 
+                            'orig_shape': orig_shape},
+                            open(os.path.join(os.path.join(output_dir, 'meta'), f'{filename}.pkl'), 'wb'))
             pbar.update(1)
 
 if __name__=='__main__':
-    input_dir = 'brats2020/2dunet/test/*.nii.gz'
-    output_dir = 'brats2020/2dunet/test-preprocessed/'
-    os.makedirs(output_dir, exist_ok=True)
-    preprocess(input_dir, output_dir)
+    argparser = ArgumentParser()
+    argparser.add_argument('--input_dir', type=str, help='directory where BraTS data is located.')
+    argparser.add_argument('--output_dir', type=str, help='directory to store preprocessed data.')
+    args = argparser.parse_args()
+    preprocess(args.input_dir, args.output_dir)
 

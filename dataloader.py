@@ -5,6 +5,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
+''' drug over from preprocessing where it was no longer needed '''
+def dim_diff(self, dim, num_downs):
+    mult    = 2**num_downs*np.ceil(dim / 2**num_downs)
+    return int(mult - dim)
+
+
 class BraTS20202d(Dataset):
 
     def nonzero_coords(self, mode): 
@@ -89,10 +95,10 @@ class BraTS2020Training2d(BraTS20202d):
         ''' 
         img         = np.load(case)
         brain_crop, nonzero, orig_shape = self.crop_to_brain_and_normalize(img, num_downs)
-        return brain_crop[:4], brain_crop[4:]
+        return brain_crop[:4], brain_crop[4:], nonzero, orig_shape
 
     def __getitem__(self, idx):
-        return self.read_brain(self.filenames[idx])
+        return self.read_brain(self.filenames[idx]), self.filenames[idx]
 
 class BraTS2020Test2d(BraTS20202d):
     '''
@@ -118,11 +124,6 @@ class BraTS2020Test2d(BraTS20202d):
                         ]
         self.num_downs       = num_downs
 
-    def slice_dataset(self, case):
-        ''' this has only been tested by observing the output which looks sane.'''
-        print(case.shape)
-        slices = [ np.split(case.copy(), case.shape[i+1], axis=i+1) for i in range(len(case.shape)-1)]
-        return slices[0], slices[1], slices[2]
 
     def read_brain(self, case, num_downs=3):
         ''' From the perspective of the model, a slice is an example, not the whole brain.
@@ -133,7 +134,6 @@ class BraTS2020Test2d(BraTS20202d):
         img         = nib.load(case[0])
         case        = np.stack([nib.load(img).get_fdata() for img in case])
         brain_crop, nonzero_brain, orig_shape_brain  = self.crop_to_brain(case)
-        np.save('brain_crop', brain_crop)
         sagittal_slices, coronal_slices, axial_slices = \
                 self.slice_dataset(brain_crop)
         return {
