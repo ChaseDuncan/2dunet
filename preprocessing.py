@@ -8,62 +8,7 @@ from glob import glob
 from argparse import ArgumentParser
 import pickle
 
-
-def binarize_problem(multilabel_problem):
-    et = np.zeros(multilabel_problem.shape)
-    wt = np.zeros(multilabel_problem.shape)
-    tc = np.zeros(multilabel_problem.shape)
-    et[np.where(multilabel_problem == 4)] = 1
-    wt[np.where(multilabel_problem > 0)] = 1
-    tc[np.where((multilabel_problem == 4) | (multilabel_problem == 1))] = 1
-    return np.stack([et, wt, tc])
-
-def patient_id(img_file):
-    ''' gets the patient id from a brats2020 file. here because it's ugly. '''
-    return "_".join(img_file.split("/")[-1].split("_")[:-1])
-
-def normalize(case):
-    ''' important: assumes ground truth is -1th volume '''
-    norm_case = np.zeros(case.shape)
-    norm_case[-1] = case[-1]
-    for i, mode in enumerate(case[:-1]):
-        norm_case[i] = ( mode - np.min(mode) ) / ( np.max(mode) - np.min(mode) )
-    return norm_case
-
-def nonzero_coords(imgs_npy): 
-    ''' gives the nonzero coordinates of a particular mode'''
-    nonzero = [np.array(np.where(i != 0)) for i in imgs_npy]
-    nonzero = [[np.min(i, 1), np.max(i, 1)] for i in nonzero]
-    nonzero = np.array([np.min([i[0] for i in nonzero], 0), np.max([i[1] for i in nonzero], 0)]).T
-    return nonzero
-
-def crop_to_brain(case):
-    orig_shape  = case.shape
-    nonzero     = nonzero_coords(case)
-    return case[:, nonzero[0][0] : nonzero[0][1] + 1,
-                   nonzero[1][0] : nonzero[1][1] + 1,
-                   nonzero[2][0] : nonzero[2][1] + 1], nonzero, orig_shape
-
-def crop_to_brain_and_normalize(case): 
-    brain_crop, nonzero, orig_shape = crop_to_brain(case)
-    return normalize(brain_crop), nonzero, orig_shape
-
-
-def read_brain(case):
-    brain_crop, nonzero, orig_shape = crop_to_brain_and_normalize(case)
-    brain_crop = np.concatenate([brain_crop[:-1], binarize_problem(brain_crop[-1])])
-    return brain_crop, nonzero, orig_shape
-
-def has_tumor(seg):
-    if np.sum(seg):
-        return 'tum'
-    else:
-        return 'not'
-    
-def slice_dataset(case):
-    # i don't know if this copy is actually needed here. 
-    slices = [ np.split(case.copy(), case.shape[i+1], axis=i+1) for i in range(len(case.shape)-1) ]
-    return slices
+from utils import *
 
 orientations = ['axial', 'coronal', 'sagittal']
 def preprocess(input_dir, output_dir):
@@ -85,6 +30,14 @@ def preprocess(input_dir, output_dir):
             header = case[0].header
             case = np.stack([c.get_fdata() for c in case])
 
+            for c in case:
+                if c.size == 0:
+                    import pdb; pdb.set_trace()
+            if case.shape[0] < 5:
+                import pdb; pdb.set_trace()
+
+            if True:
+                continue
             brain_crop, nonzero, orig_shape = read_brain(case)
             brain_crop_slices = slice_dataset(brain_crop)
 
