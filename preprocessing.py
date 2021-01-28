@@ -11,7 +11,7 @@ import pickle
 from utils import *
 
 orientations = ['axial', 'coronal', 'sagittal']
-def preprocess(input_dir, output_dir):
+def preprocess(input_dir, output_dir, no_crop):
     ''' creates output_dir if it doesn't exist already '''
     filenames       = glob(input_dir)
     filenames       = [[f for f in filenames if 't1.' in f],
@@ -30,15 +30,14 @@ def preprocess(input_dir, output_dir):
             header = case[0].header
             case = np.stack([c.get_fdata() for c in case])
 
+            #   hacks for catching unexpected things
             for c in case:
                 if c.size == 0:
                     import pdb; pdb.set_trace()
             if case.shape[0] < 5:
                 import pdb; pdb.set_trace()
 
-            if True:
-                continue
-            brain_crop, nonzero, orig_shape = read_brain(case)
+            brain_crop, nonzero, orig_shape = read_brain(case, no_crop=no_crop)
             brain_crop_slices = slice_dataset(brain_crop)
 
             pid = patient_id(patient[0])
@@ -57,6 +56,7 @@ if __name__=='__main__':
     argparser = ArgumentParser()
     argparser.add_argument('--input_dir', type=str, help='directory where BraTS data is located.')
     argparser.add_argument('--output_dir', type=str, help='directory to store preprocessed data.')
+    argparser.add_argument('--no_crop', action='store_true', help='do not crop brain.')
     args = argparser.parse_args()
-    preprocess(args.input_dir, args.output_dir)
+    preprocess(args.input_dir, args.output_dir, args.no_crop)
 

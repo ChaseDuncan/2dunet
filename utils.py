@@ -36,10 +36,12 @@ def patient_id(img_file):
 
 def normalize(case): 
     ''' important: assumes ground truth is -1th volume '''
+    if len(np.where(case[-1]>0)) == 0:
+        return case
     norm_case = np.zeros(case.shape)
     norm_case[-1] = case[-1]
     for i, mode in enumerate(case[:-1]):
-        norm_case[i] = ( mode - np.min(mode) ) / ( np.max(mode) - np.min(mode) )
+        norm_case[i] = ( mode - np.min(mode) ) / ( np.max(mode) - np.min(mode) + 1e-8)
     return norm_case
 
 def nonzero_coords(imgs_npy): 
@@ -74,8 +76,12 @@ def crop_to_brain_and_normalize(case):
     return normalize(brain_crop), nonzero, orig_shape
 
 
-def read_brain(case):
-    brain_crop, nonzero, orig_shape = crop_to_brain_and_normalize(case)
+def read_brain(case, no_crop=False):
+    if not no_crop:
+        brain_crop, nonzero, orig_shape = crop_to_brain_and_normalize(case)
+    else:
+        brain_crop = normalize(case)
+        nonzero = orig_shape = None
     brain_crop = np.concatenate([brain_crop[:-1], binarize_problem(brain_crop[-1])])
     return brain_crop, nonzero, orig_shape
 
@@ -90,4 +96,6 @@ def slice_dataset(case):
     slices = [ np.split(case.copy(), case.shape[i+1], axis=i+1) for i in range(len(case.shape)-1) ]
     return slices
 
-
+def get_pid(patient_file):
+    pid = patient_file.split('/')[-1] # only need the pid, not the entire path
+    return pid

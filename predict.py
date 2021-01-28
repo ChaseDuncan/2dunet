@@ -1,188 +1,136 @@
 from argparse import ArgumentParser
-
-argparser = ArgumentParser()
-argparser.add_argument('--device', type=int, required=True, help='id of device to run training on.')
-argparser.add_argument('--seed', type=int, required=True, help='random seed to use for training.')
-argparser.add_argument('--dir', type=str, help='directory for all model output, logs, checkpoints, etc.')
-argparser.add_argument('--debug', action='store_true', 
-        help='use debug mode which only uses one example to train and eval.')
-argparser.add_argument('--freeze_encoder', action='store_true', 
-        help='train UNet with frozen encoder. (default: False).')
-argparser.add_argument('--save_freq', type=int, default=1, 
-        help='epoch frequency with which to checkpoint. (default = 1)')
-
-args = argparser.parse_args()
-
-import sys
+from glob import glob
+import sys 
 import os
 import random
 
-import torch
-import torchvision
-import torch.optim as optim
-import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
-from torch.utils.tensorboard import SummaryWriter
-
-import numpy as np
-from tqdm import tqdm
-
-from dataloader import BraTS20202d
-from models import UNetGenerator
-from losses import BraTSBCEWithLogitsLoss
-from sklearn.model_selection import train_test_split 
-
-from utils import *
-
-os.makedirs(args.dir, exist_ok=True)
-os.makedirs(args.dir + '/logs/', exist_ok=True)
-os.makedirs(args.dir + '/checkpoints/', exist_ok=True)
-
-#   sundry
-seed        = args.seed
-device      = torch.device(f'cuda:{args.device}')
+'''
+    set up variables
+'''
+#   invariant data dirs
+pred_dir = 'brats2020/2dunet/model-predictions'
+inpt_dir = 'brats2020/2dunet/test-preprocessed-nocrop/data/'
+#inpt_dir = 'brats2020/2dunet/train-preprocessed-v2/data/'
 
 #   model params
 input_nc    = 4
 output_nc   = 3
 num_downs   = 3
 ngf         = 64
-#   optim params
-lr          = 8e-3
-momentum    = 0.9
-wd          = 1e-4
-#   train params
-epochs      = 150
+
+#   CLI argument parsing
+argparser = ArgumentParser()
+
+argparser.add_argument('--dir', type=str, required=True,
+        help='directory for all model output, logs, checkpoints, etc.')
+argparser.add_argument('--device', type=int, required=True, help='id of device to run training on.')
+argparser.add_argument('--batch_size', type=int, default=150, help='batch size. (default: 150)')
+argparser.add_argument('--seed', type=int, required=True, help='random seed to use for training.')
+argparser.add_argument('--debug', action='store_true', 
+        help='use debug mode which only uses one example to train and eval.')
+argparser.add_argument('--freeze_encoder', action='store_true', 
+        help='train UNet with frozen encoder. (default: False).')
+
+args            = argparser.parse_args()
+seed            = args.seed
+try:
+    model_name  = args.dir.split('/')[-1]
+except:
+    print(f'invalid model directory: {args.dir}')
+output_dir      = os.path.join(pred_dir, model_name)
+os.makedirs(output_dir, exist_ok=True)
+checkpoint = sorted(glob(f'{args.dir}/checkpoints/*'))[-1]
+
+
+'''
+    prediction
+'''
+import torch
+import torchvision
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+import numpy as np
+from tqdm import tqdm
+
+from dataloader import BraTS20202dPredict
+from models import UNetGenerator
+
+from utils import *
+
+
+#   sundry
+device      = torch.device(f'cuda:{args.device}')
+
 #   fix all randomness for reproducibility
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 torch.set_deterministic(True)
-tr_data_dir    = 'brats2020/2dunet/train-preprocessed-v2/data/'
-te_data_dir    = 'brats2020/2dunet/test-preprocessed-v2/data/'
+
 if args.debug:
-    tr_data_dir    = 'brats2020/2dunet/debug/'
-    te_data_dir = 'brats2020/2dunet/debug/'
+    inpt_dir    = 'brats2020/2dunet/debug/'
     num_workers =0
-    batch_size = 1
 else:
     num_workers = 4
-    batch_size = 150
 
-#   data setup
+def collate_fn(batch):
+    inputs = []
+    samples = []
+    for src, _, sample in batch:
+        inputs.append(src)
+        samples.append(sample)
+    return torch.cat(inputs), samples
 
-#print(f'loading data from: {data_dir}')
-train_dataset                     = BraTS20202d(tr_data_dir, only_tumor=True)
-test_dataset                     = BraTS20202d(te_data_dir, only_tumor=True)
-train_loader                = DataLoader(train_dataset, shuffle=True, 
-                                        num_workers=num_workers, batch_size=batch_size)
-                                        #collate_fn=collate_fn)
-# batch_size == 1 required for the image logging to work properly
-test_loader                 = DataLoader(test_dataset, shuffle=False, 
-                                num_workers=num_workers, batch_size=1)
+pred_dataset                     = BraTS20202dPredict(inpt_dir)
+# no batching so it's not
+pred_loader                 = DataLoader(pred_dataset, shuffle=False, #collate_fn=collate_fn,
+                                num_workers=num_workers, batch_size=args.batch_size, pin_memory=False)
 
 #   model setup
 model           = UNetGenerator(input_nc, output_nc, num_downs, ngf=ngf, 
-                                freeze_encoder=args.freeze_encoder).to(device)
-loss            = BraTSBCEWithLogitsLoss()
-optimizer       = optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=wd)
+                                freeze_encoder=args.freeze_encoder)
 
-start_epoch = 0
-writer          = SummaryWriter(log_dir=f'{args.dir}/logs/{start_epoch}/')
+checkpoint = torch.load(checkpoint, map_location=device)
+model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+model = model.to(device)
 
-def log_epoch(stuff):
-    ''' convenience function for logging everything. keeps the main loop clean.'''
-    epoch   = stuff['epoch']
-    writer.add_scalar('Loss/train', stuff['avg_train_loss'], epoch)
-    writer.add_scalar('Loss/eval', stuff['avg_eval_loss'], epoch)
-    writer.add_scalar('Dice/enhancing', stuff['avg_dice'][0], epoch)
-    writer.add_scalar('Dice/whole', stuff['avg_dice'][1], epoch)
-    writer.add_scalar('Dice/core', stuff['avg_dice'][2], epoch)
-    for img in stuff['images']:
-        grid    = torchvision.utils.make_grid(
-                    [s.squeeze() for s in torch.split(img[1].squeeze(), 1)], nrow=1, pad_value=255)
-        # need a dummy 'channel' dimension for the tensorboard api
-        grid    = grid.unsqueeze(1)
-        writer.add_images(f'Images/{img[0]}', grid, global_step=epoch)
-    # TODO: Haus, NLL, images
-    #writer.add_scalar('Dice/whole', np.random.random(), n_iter)
-    #writer.add_scalar('Dice/enhancing', np.random.random(), n_iter)
-    #writer.add_scalar('Dice/core', np.random.random(), n_iter)
-    
-def dice_coeff(pred, trgt):
-    smooth  = 1.
-    if not pred.is_contiguous():
-        pred = pred.contiguous()
-    if not trgt.is_contiguous():
-        trgt = trgt.contiguous()
-    pflat   = pred.view(-1)
-    tflat   = trgt.view(-1)
+def store_outputs(sigs, filenames):
+    for output, filename in zip(sigs, filenames):
+        sample                                          = filename#[0]
+        patient                                         = sample.split('.')[0]
+        patient_output_dir                              = os.path.join(output_dir, patient)
 
-    intsc   = (pflat*tflat).sum()
+        os.makedirs(patient_output_dir, exist_ok=True)
+        np.save(os.path.join(patient_output_dir, sample), sigs)
 
-    return (2*intsc + smooth)/ (pflat.sum() + tflat.sum() + smooth)
+#   simple prediction loop: load it, predict X, save it.
+with torch.no_grad():
+    model.eval()
+    for j, (src, filenames) in enumerate(tqdm(pred_loader)):
+        #   default collate_fn returns patient string in a tuple
 
-def compute_dice(output, target):
-    sigs                            = torch.sigmoid(output) 
-    preds                           = torch.zeros(sigs.size(), dtype=torch.uint8)
-    preds[torch.where(sigs > 0.5)]  = 1
-    preds                           = preds.cuda(output.get_device())
-    dice = np.zeros(3)
-    for i in range(3):
-        dice[i] = dice_coeff(preds[:, i].squeeze(), target[:, i].squeeze())
-    return dice
+        src_pad                                         = torch.zeros((args.batch_size, 4, 240, 240))
+        src_pad[..., :src.shape[-2], :src.shape[-1]]    = src
+        src_pad                                         = src_pad.to(device).float()
 
-examples_to_track   = [random.randint(0, len(test_dataset)) for _ in range(10)]
-for epoch in range(epochs):
-    print(examples_to_track)
-    model.train()
-    stuff   = {'epoch': epoch, 'images': []}
-    avg_train_loss    = 0
+        output                                          = model(src_pad) 
+        sigs                                            = \
+                torch.sigmoid(output).cpu().numpy()[..., :src.shape[-2], :src.shape[-1]]
+        store_outputs(sigs, filenames)
 
-    for i, (src, tgt) in enumerate(tqdm(train_loader)):
-        optimizer.zero_grad()
-        src, tgt    = src.to(device).float(), tgt.to(device).float()
-        output      = model(src) 
-        loss_e      = loss(output, tgt)
-        
-        avg_train_loss    = loss_e/(i+1) + (i/(i+1))*avg_train_loss
-        loss_e.backward()
-        optimizer.step()
-
-    stuff['avg_train_loss'] = avg_train_loss 
-    with torch.no_grad():
-        model.eval()
-        avg_eval_loss   = 0
-        stuff['avg_dice'] = np.zeros(3)
-        for j, (src, tgt) in enumerate(tqdm(test_loader)):
-            src, tgt    = src.to(device).float(), tgt.to(device).float()
-            output          = model(src) 
-            loss_e          = loss(output, tgt)
-            # updata average loss
-            stuff['avg_dice']        = compute_dice(output, tgt)/(j+1) + (j/(j+1))*stuff['avg_dice']
-            avg_eval_loss   = loss_e/(j+1) + (j/(j+1))*avg_eval_loss
-            if j+1 in examples_to_track:
-                sigs                        = torch.sigmoid(output) 
-                sigs_npy = sigs.cpu().numpy()
-                np.save(os.path.join(args.dir, 'deleteme_sigs'), sigs_npy)
-                preds                       = torch.zeros(sigs.size(), dtype=torch.uint8)
-                preds[torch.where(sigs > 0.5)] = 255
-                tgt_scaled                  = tgt*255
-                img                         = torch.cat([preds, tgt_scaled.cpu()], dim=1).to(torch.uint8)
-                stuff['images'].append((j+1, img))
-
-    # breaks if batch_size > 1
-    stuff['avg_eval_loss']  = avg_eval_loss 
-    log_epoch(stuff)
-    
-    if epoch % args.save_freq == 0:
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'avg_train_loss': avg_train_loss,
-            'avg_eval_loss': avg_eval_loss,
-            }, f'{args.dir}/checkpoints/epoch_{epoch:03}.pt'
-            )
+## breaks if batch_size > 1
+#stuff['avg_eval_loss']  = avg_eval_loss 
+#log_epoch(stuff)
+#    
+#    if epoch % args.save_freq == 0:
+#        torch.save({
+#            'epoch': epoch,
+#            'model_state_dict': model.state_dict(),
+#            'optimizer_state_dict': optimizer.state_dict(),
+#            'avg_train_loss': avg_train_loss,
+#            'avg_eval_loss': avg_eval_loss,
+#            }, f'{args.dir}/checkpoints/epoch_{epoch:03}.pt'
+#            )
 

@@ -28,7 +28,7 @@ import numpy as np
 from tqdm import tqdm
 
 from dataloader import BraTS20202d
-from models import UNetGenerator
+from models import UNetGenerator, UNetGenerator3d
 from losses import BraTSBCEWithLogitsLoss
 from sklearn.model_selection import train_test_split 
 
@@ -135,7 +135,6 @@ def compute_dice(output, target):
 
 examples_to_track   = [random.randint(0, len(test_dataset)) for _ in range(10)]
 for epoch in range(epochs):
-    print(examples_to_track)
     model.train()
     stuff   = {'epoch': epoch, 'images': []}
     avg_train_loss    = 0
