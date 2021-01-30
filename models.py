@@ -190,10 +190,17 @@ class UNetSkipConnectionBlock3d(nn.Module):
 
     def forward(self, x):
         if self.outermost:
-            return self.model(x)
+            x = self.model(x)
+            import pdb; pdb.set_trace()
+            return x
         else:
             y = self.model(x)  
-            y = nn.functional.pad(y, (0,x.size()[-2]-y.size()[-2],0,x.size()[-1]-y.size()[-1]))
+            print(y.size())
+            if len(y.size()) > 4: 
+                y = nn.functional.pad(y, (0, x.size()[-3]-y.size()[-3], \
+                        0,x.size()[-2]-y.size()[-2],0,x.size()[-1]-y.size()[-1]))
+            else:
+                y = nn.functional.pad(y, (0,x.size()[-2]-y.size()[-2],0,x.size()[-1]-y.size()[-1]))
             return torch.cat([x, y], 1)
 
 
@@ -211,12 +218,6 @@ class UNetGenerator3d(nn.Module):
                                             input_nc=None, submodule=None, 
                                             norm_layer=norm_layer, innermost=True, 
                                             freeze_encoder=freeze_encoder)
-
-        #for i in range(num_downs - 5):
-        #    unet_block = UNetSkipConnectionBlock(ngf * 8, ngf * 8, 
-        #                                        input_nc=None, submodule=unet_block, 
-        #                                        norm_layer=norm_layer, use_dropout=use_dropout,
-        #                                        freeze_encoder=freeze_encoder)
         unet_block = UNetSkipConnectionBlock3d(ngf * 4, ngf * 8, input_nc=None, 
                                             submodule=unet_block, norm_layer=norm_layer, 
                                             freeze_encoder=freeze_encoder)

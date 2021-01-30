@@ -51,3 +51,31 @@ class BraTS20202dPredict(BraTS20202d):
         return X.squeeze().unsqueeze(0), ".".join(patient.split('.')[:-1]).split('/')[-1]
 
 
+class BraTS20203d(Dataset):
+    def __init__(self, data_dir):
+        self.list_of_lists_of_filenames = glob(f'{data_dir}/*.nii.gz')
+        self.list_of_lists_of_filenames = [
+                sorted([ f for f in self.list_of_lists_of_filenames if "t1.nii.gz" in f ]),
+                sorted([ f for f in self.list_of_lists_of_filenames if "t1ce.nii.gz" in f ]),
+                sorted([ f for f in self.list_of_lists_of_filenames if "t2.nii.gz" in f ]),
+                sorted([ f for f in self.list_of_lists_of_filenames if "flair.nii.gz" in f ]),
+                sorted([ f for f in self.list_of_lists_of_filenames if "seg.nii.gz" in f ])
+        ]
+
+    def __len__(self):
+        return len(self.list_of_lists_of_filenames[0])
+
+    def _load_images(self, idx):
+        images = []
+        for m in self.list_of_lists_of_filenames:
+            image = nib.load(m[idx])
+            images.append(image)
+            header = image.header
+        images = np.array([image.get_fdata() for image in images])
+        return images, header
+
+    
+    def __getitem__(self, idx):
+        case, header = self._load_images(idx)
+        brain_crop, nonzero, orig_shape = read_brain(case, no_crop=False)
+        return torch.from_numpy(brain_crop[:4]), torch.from_numpy(brain_crop[4:])

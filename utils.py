@@ -2,13 +2,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 from time import time
+# used for debugging. can be removed.
+import nibabel as nib
 
 def dim_diff(dim, num_downs):
     mult    = 2**num_downs*np.ceil(dim / 2**num_downs)
     return int(mult - dim)
 
 def pad_ex(ex, mult):
-    pad = ((0, 0), (0, int(mult - ex.shape[-2])), (0, int(mult - ex.shape[-1])))
+    pad = [(0, 0)] + [(0, max(0, int(mult - ex.shape[-i]))) for i in range(len(ex.shape) - 1, 0, -1)]
+    pad = tuple(pad)
     ex_pad = np.pad(ex, pad)
     return ex_pad
 
@@ -65,7 +68,7 @@ def crop_to_brain(case, img_size=200):
     if len(nonzero) == 0:
         crop = case.squeeze()
     else:
-        crop = case[:, nonzero[0][0] : nonzero[0][1] + 1,
+        crop = case[:, nonzero[1][0] : nonzero[0][1] + 1,
                        nonzero[1][0] : nonzero[1][1] + 1,
                        nonzero[2][0] : nonzero[2][1] + 1].squeeze()
     crop = pad_ex(crop, img_size)
@@ -83,6 +86,9 @@ def read_brain(case, no_crop=False):
         brain_crop = normalize(case)
         nonzero = orig_shape = None
     brain_crop = np.concatenate([brain_crop[:-1], binarize_problem(brain_crop[-1])])
+    img = nib.Nifti1Image(brain_crop[0], np.eye(4))
+    nib.save(img,  'deleteme.nii.gz')
+
     return brain_crop, nonzero, orig_shape
 
 def has_tumor(seg):
@@ -99,3 +105,49 @@ def slice_dataset(case):
 def get_pid(patient_file):
     pid = patient_file.split('/')[-1] # only need the pid, not the entire path
     return pid
+
+
+'''
+####################################################################
+#
+#   This was the script I used to separate the data into train/test.
+#   It is parked here for lack of a better place to be.
+#
+####################################################################
+import os
+import random
+from shutil import copyfile
+from glob import glob
+
+##### split the brats 2020 dataset into random 80/20 split.
+tr_dir ='brats2020/2dunet/train/'
+te_dir ='brats2020/2dunet/test/'
+os.makedirs(tr_dir, exist_ok=True)
+os.makedirs(te_dir, exist_ok=True)
+
+filenames       = glob(f'brats2020/MICCAI_BraTS2020_TrainingData/*/*.nii.gz')
+filenames       = [[f for f in filenames if 't1.' in f],
+                [f for f in filenames if 't1ce.' in f],
+                [f for f in filenames if 't2.' in f],
+                [f for f in filenames if 'flair.' in f],
+                [f for f in filenames if 'seg.' in f]
+                ]
+z               = list(zip(*filenames))
+random.shuffle(z)
+sp = round(.8*len(filenames[0]))
+train, test = z[:sp], z[sp:]
+for f1, f2, f3, f4, f5 in train:
+    copyfile(f1, os.path.join(tr_dir, f1.split('/')[-1]))
+    copyfile(f2, os.path.join(tr_dir, f2.split('/')[-1]))
+    copyfile(f3, os.path.join(tr_dir, f3.split('/')[-1]))
+    copyfile(f4, os.path.join(tr_dir, f4.split('/')[-1]))
+    copyfile(f5, os.path.join(tr_dir, f5.split('/')[-1]))
+
+for f1, f2, f3, f4, f5 in test:
+    copyfile(f1, os.path.join(te_dir, f1.split('/')[-1]))
+    copyfile(f2, os.path.join(te_dir, f2.split('/')[-1]))
+    copyfile(f3, os.path.join(te_dir, f3.split('/')[-1]))
+    copyfile(f4, os.path.join(te_dir, f4.split('/')[-1]))
+    copyfile(f5, os.path.join(te_dir, f5.split('/')[-1]))
+'''
+
